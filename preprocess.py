@@ -36,8 +36,8 @@ for folder in folders:
         sections = sections[:del_point] #Remove all sections after references / See also
         del sections[1::2] #Remove Headers
         dataset = dataset+sections
-for k in removed_sections:
-    print(k.replace(" ","_").replace("=","").lower())
+#for k in removed_sections:
+    #print(k.replace(" ","_").replace("=","").lower())
 
 #for each line of each document
 #get the lemma
@@ -60,6 +60,7 @@ ner = dict()
 for doc in doc_bin.get_docs(nlp.vocab):
     num_tokens+=len(doc)
     for token in doc:
+        print(token, token.lemma_, token.pos_, token.ner_)
         lemmas.add(token.lemma_)
         if(token.pos_ in pos.keys()):
             pos[token.pos_]+=1
@@ -69,14 +70,17 @@ for doc in doc_bin.get_docs(nlp.vocab):
             ner[token.ent_type_]+=1
         else:
             ner[token.ent_type_]=1
+'''
 print("Number of tokens is ",num_tokens)
 print("Number of lemmas is ",len(lemmas))
-#for k,v in pos.items():
-#    print(k,v)
+for k,v in pos.items():
+    print(k,v)
 
-#print("NER")
-#for k,v in ner.items():
-#    print(k,v)
+print("NER")
+
+for k,v in ner.items():
+    print(k,v)
+'''
 
 
 
