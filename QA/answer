@@ -1,0 +1,101 @@
+#!/usr/bin/python3 -W ignore::DeprecationWarning
+# -*- coding:utf8 -*-
+import sys
+from haystack.document_stores import InMemoryDocumentStore
+from haystack.nodes import TfidfRetriever
+from haystack.pipelines import ExtractiveQAPipeline
+from haystack.nodes import TextConverter
+from import_QA import reader, qa_tokenizer, bool_qa_model, summarizer
+import torch
+
+class QAPipeline:
+
+    def __init__(self, context_file_path) -> None:
+        # Convert to document format
+        converter = TextConverter(remove_numeric_tables=True, valid_languages=["en"])
+        doc_txt = converter.convert(file_path=context_file_path, meta=None)[0]
+
+        # Setup document store
+        self.document_store = InMemoryDocumentStore()
+        self.document_store.write_documents([doc_txt])
+
+        # Setup retriever and reader
+        self.retriever = TfidfRetriever(document_store=self.document_store)
+        self.reader = reader
+
+        # Setup QA pipeline
+        self.pipe = ExtractiveQAPipeline(self.reader, self.retriever)
+
+        self.doc_content = doc_txt.content
+        self.preprocessed_doc = None
+        self.summarized_doc = None
+        
+    def boolean_question(self, question):
+        boolean_starts = ["is", "was", "are", "did", "do", "does", "can", "could", "am", "has"]
+        for starter in boolean_starts:
+            if question.lower().startswith(starter):
+                return True
+        return False
+    
+    def preprocess_doc_remove_sections(self, text):
+        document = ""
+        sections = text.split("==")  # break text into sections
+        flag = 0
+        if(" See also " in sections):
+            flag = 1
+            del_point = sections.index(" See also ")
+        elif(" References " in sections):
+            flag = 1
+            del_point = sections.index(" References ")
+        if flag:
+            sections = sections[:del_point] #Remove all sections after references / See also
+            del sections[1::2] #Remove Headers
+        for section in sections:
+            document += str(section)
+        
+        return " ".join(document.split())
+
+    def summarize_text(self, text, max_len):
+        try:
+            summary = summarizer(text, max_length=max_len, min_length=10, do_sample=False)
+            return summary[0]["summary_text"]
+        except IndexError as ex:
+            return self.summarize_text(text=text[:(len(text) // 2)], max_len=max_len//2) + self.summarize_text(text=text[(len(text) // 2):], max_len=max_len//2)
+
+
+    def predict_boolean(self, question):
+        if not self.preprocessed_doc:
+            self.preprocessed_doc = self.preprocess_doc_remove_sections(self.doc_content)
+
+            self.summarized_doc = self.summarize_text(self.preprocessed_doc, 512)
+        
+        sequence = qa_tokenizer.encode_plus(question, self.summarized_doc, return_tensors="pt")['input_ids']
+        logits = bool_qa_model(sequence)[0]
+        probabilities = torch.softmax(logits, dim=1).detach().tolist()[0]
+        prob_yes = round(probabilities[1], 2)
+        prob_no = round(probabilities[0], 2)
+        return 'Yes' if prob_yes >= prob_no else 'No'
+
+
+    def predict_extractive(self, question):
+        prediction = self.pipe.run(query=question, params={"Retriever": {"top_k": 3}, "Reader": {"top_k": 1}})
+
+        return prediction['answers'][0].answer
+
+
+    def get_answer(self, question):
+        if self.boolean_question(question):
+            return self.predict_boolean(question)
+
+        return self.predict_extractive(question)
+
+
+if __name__ == "__main__":
+    context_file_path = sys.argv[1]
+    question_file = sys.argv[2]
+
+    qa_pipeline = QAPipeline(context_file_path)
+
+    with open(question_file, 'r') as f:
+        for line in f:
+            print(qa_pipeline.get_answer(line))
