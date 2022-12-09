@@ -1,0 +1,125 @@
+#!/usr/bin/python3 -W ignore::DeprecationWarning
+# -*- coding:utf8 -*-
+import sys
+import spacy
+import codecs
+from collections import defaultdict
+from spacy.tokens import DocBin
+import os
+import logging
+from import_QG import tokenizer, model, qa_model
+
+import re
+
+nlp = spacy.load("en_core_web_sm")
+
+# import neuralcoref
+# neuralcoref.add_to_pipe(nlp)
+
+class QGPipeline:
+    def __init__(self, input_file_path, num_of_questions):
+        self.document = self.read_doc(input_file_path)
+
+        doc = nlp(self.document)
+        coref_doc = doc._.coref_resolved
+        coref_doc = self.preprocess_doc_remove_sections(coref_doc)
+        doc = nlp(coref_doc)
+
+        #doc = self.preprocess_doc_remove_sections(self.document)
+        #doc = nlp(doc)
+
+        sentences = [sent for sent in doc.sents]
+        ner_dict = self.ner(sentences)
+        self.generate_n_questions(num_of_questions, ner_dict, sentences)
+
+    def read_doc(self, doc_path):
+        with open(doc_path) as f:
+            document = f.read()
+            return document
+    
+    def preprocess_doc_remove_sections(self, text):
+        return " ".join(text.split())
+
+    def ner(self, sentences):
+        ner_dict = defaultdict(list)
+        for idx, sentence in enumerate(sentences):
+            for entity in sentence.ents:
+                ner_dict[entity.label_].append((idx, str(entity.text)))
+        return ner_dict
+
+    def generate_question(self, answer, context, max_length=64):
+        input_text = f"answer: {answer}  context: {context} </s>"
+        features = tokenizer([input_text], return_tensors='pt')
+        output = model.generate(input_ids=features['input_ids'], attention_mask=features['attention_mask'], max_length=max_length)
+        question = tokenizer.decode(output[0])[16:-4]
+        return question
+    
+    def get_object_phrase(self, context):
+        for token in context:
+            if ("dobj" in token.dep_):
+                subtree = list(token.subtree)
+                start = subtree[0].i
+                end = subtree[-1].i + 1
+                return context[start:end]
+
+    def getScore(self, visited_set, idx, ner, question, context, confidence_score):
+        score = 0
+        words = question.split(' ')
+        if(len(words) < 4):
+            score-=5
+        if(words[-1].lower() == 'and?'):
+            score-=5
+        q = nlp(question)
+        if(len(q.ents) == 0):
+            score-=3
+        if((idx, ner) in visited_set): #downrank questions that have been generated from the same context
+            score-=1
+        if words[0] not in {'What','When','How',"Where",'Why','Who'}: 
+            score-=5
+        if self.get_object_phrase(context) is None: #questions that are formed from context without dobj
+            score-=1
+        if confidence_score < 0.8:
+            score-=1
+        if confidence_score < 0.4:
+            score-=3
+        '''
+        non_fillers = [word.replace('?','') for word in words if len(word)>4]
+        if(len(set(non_fillers))!=len(non_fillers)):
+            score-=1
+        '''
+        return score
+
+    def generate_n_questions(self, n, ner_dict, sentences):
+        discarded_candidates=[]
+        count = 0
+        visited_set=set()
+        for ner in ['PERSON', 'LOC','GPE', 'TIME', 'ALL']:
+            list_ner = ner_dict[ner]
+            for idx,entity in list_ner:
+                question = self.generate_question(entity, sentences[idx])
+                confidence_score = qa_model(question=str(question), context=str(sentences[idx]))['score']
+                score = self.getScore(visited_set, idx, ner, question, sentences[idx], confidence_score)
+                if(score>=0):
+                    print(question)
+                    count+=1
+                else:
+                    discarded_candidates.append([score, question])
+                visited_set.add((idx,ner))
+                if count == n:
+                    return
+        discarded_candidates = sorted(discarded_candidates,key=lambda x:x[0],reverse=True)
+        
+        i = 0
+        while(count < n and i < len(discarded_candidates)):
+            print(discarded_candidates[i][1])
+            count+=1
+            i+=1
+        
+        while(count<n):
+            print("What is a question?")
+            count+=1
+
+if __name__ == "__main__":    
+    input_file_path = sys.argv[1]
+    num_of_questions = int(sys.argv[2])
+    qg_pipeline = QGPipeline(input_file_path, num_of_questions)
