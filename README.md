@@ -5,5 +5,5 @@ This project consists of a question answering (QA) and question generation (QG) 
 ## Running this project
 This project can be run by building the docker image specified in the docker folder. Alternatively, the the same docker image can be pulled from its public repository (ads28/submit_v1)
 
-##Project Details
+## Project Details
 To know more about the QA/QG pipeline, models used, experiments conducted and pipeline accuracies, please check the ProjectReport.pdf file
