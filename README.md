@@ -1,4 +1,4 @@
-# NLPProject
+## Introduction
 This project consists of a question answering (QA) and question generation (QG) system. The system generates n questions (n specified by the user) given a wikipedia article as context. Alternatively, the user can specify n questions created from a wikipedia document, and the question answering system will answer all n questions. The QA system can handle both True/False as well as extractive passage questions
 
 
